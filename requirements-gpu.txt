@@ -1,0 +1,58 @@
+# Optional GPU acceleration for the embedding path.
+#
+#   bash setup-gpu.sh          # installs this + verifies the device
+#   EMBEDDING_DEVICE=auto make benchmark
+#
+# NOT required. Everything runs on CPU without it; the GPU only changes how
+# fast embeddings are computed, never what they contain (verified: Precision@10
+# is bit-identical on CPU and CUDA for both backends).
+#
+# ── Why this file exists ────────────────────────────────────────────────────
+# onnxruntime has no GPU support in its default build. `fastembed` runs ONNX,
+# so on a machine with a CUDA GPU it still computes on CPU unless the GPU build
+# of onnxruntime is installed. That is invisible: the results are identical,
+# just slower.
+#
+# ── The part that bites ─────────────────────────────────────────────────────
+# `pip install onnxruntime-gpu` does NOT install the CUDA runtime. Without it,
+# onnxruntime's provider load fails with:
+#
+#   Failed to load library .../libonnxruntime_providers_cuda.so with error:
+#   libcublasLt.so.13: cannot open shared object file
+#
+# and then **falls back to CPU while still returning correct results**. One
+# ERROR line on stderr, no exception, no change in output. So the second line
+# below is not optional: the nvidia-*-cu13 wheels put libcublas and friends in
+# `site-packages/nvidia/*/lib`, which is not on the loader path. app/runtime.py
+# preloads them (RTLD_GLOBAL) and verifies the session actually bound
+# CUDAExecutionProvider before claiming the GPU is in use.
+
+# GPU build of onnxruntime (replaces the CPU onnxruntime; same `onnxruntime`
+# module name, adds CUDAExecutionProvider + TensorrtExecutionProvider).
+onnxruntime-gpu>=1.20,<2.0
+
+# CUDA runtime libraries.
+#
+# Kept deliberately short. onnxruntime's provider needs libcublasLt, libcublas,
+# libcudart and libcudnn; the smaller math libraries come in transitively.
+# Naming them explicitly is actively harmful here: `nvidia-cufft-cu12` and
+# friends resolve to the *cu12* generation and drag in nvidia_cublas_cu12, a
+# 580 MB wheel, alongside the cu13 runtime that is already installed. That
+# combination exhausted the disk on first attempt.
+#
+# Package naming is also inconsistent across CUDA generations, which is worth
+# knowing before debugging a failed install:
+#
+#   cublas   CUDA 13 -> `nvidia-cublas`         (plain name)
+#            CUDA 12 -> `nvidia-cublas-cu12`
+#   cudnn    both   -> `nvidia-cudnn-cu13` / `nvidia-cudnn-cu12`
+#
+# The `nvidia-cublas-cu13` and bare `nvidia-cudnn` names resolve to 0.0.x
+# placeholder stubs with no wheels, so asking for them fails outright.
+#
+# Check your driver with `nvidia-smi` (the "CUDA Version" line is the driver's
+# maximum supported runtime). Driver >= 580 supports CUDA 13; for an older
+# driver, swap these three for the -cu12 equivalents.
+nvidia-cublas>=13.0
+nvidia-cudnn-cu13>=9.0
+nvidia-cuda-runtime>=13.0
